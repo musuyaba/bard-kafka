@@ -3,14 +3,28 @@
 # env
 
 # Change env on broker
-if [ -e /wrapper/modify-broker-env-done ]; then
-    echo "/wrapper/modify-broker-env-done already exists. Skipping modification."
-else
-    apk --no-cache add gettext
-    # Substitute variables in the template file
-    envsubst </wrapper/wrapper-broker.sh.template >/wrapper/wrapper-broker.sh
+ITERATIONS=${BROKERS}
 
-    touch /wrapper/modify-broker-env-done
-    # Display the modified file
-    cat /wrapper/wrapper-broker.sh
-fi
+i=1
+
+while [ "$i" -le "$ITERATIONS" ]; do
+    FILE_PATH="/wrapper/modify-broker-env-done-$i"
+
+    if [ -e "$FILE_PATH" ]; then
+        echo "$FILE_PATH already exists. Skipping modification."
+    else
+        # Check if gettext is already installed
+        if ! apk info -q gettext; then
+            # Install gettext if not installed
+            apk --no-cache add gettext
+        fi
+        # Substitute variables in the template file
+        envsubst </wrapper/wrapper-broker.sh.template > "/wrapper/wrapper-broker-$i.sh"
+
+        touch "$FILE_PATH"
+        # Display the modified file
+        cat "/wrapper/wrapper-broker-$i.sh"
+    fi
+
+    i=$((i + 1))
+done
