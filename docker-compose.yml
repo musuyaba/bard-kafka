@@ -1,61 +1,89 @@
-version: '3'
+version: '3.7'
+
 services:
+  modify-env:
+    image: alpine:latest
+    container_name: modify-env
+    volumes:
+      - ./wrapper:/wrapper
+    env_file:
+      - .env
+    command: /bin/sh -c "/wrapper/substitute.sh"
+  
   zookeeper:
     image: confluentinc/cp-zookeeper:7.5.0
     hostname: zookeeper
     container_name: zookeeper
+    restart: always
     ports:
-      - "2181:2181"
+      - "${ZOOKEEPER_PORT}:${ZOOKEEPER_PORT}"
     environment:
-      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_CLIENT_PORT: ${ZOOKEEPER_PORT}
       ZOOKEEPER_TICK_TIME: 2000
+    volumes:
+      - ./wrapper:/wrapper
+    command: /bin/sh -c "while [ ! -e /wrapper/modify-broker-env-done ]; do sleep 1; done && exec /etc/confluent/docker/run"
 
-  broker:
+  broker1:
+    user: root
+    hostname: broker1
+    container_name: broker1
     image: confluentinc/cp-kafka:7.5.0
-    hostname: broker
-    container_name: broker
     depends_on:
       - zookeeper
     ports:
-      - "29092:29092"
-      - "9092:9092"
-      - "9101:9101"
-    environment:
-      KAFKA_BROKER_ID: 1
-      KAFKA_ZOOKEEPER_CONNECT: 'zookeeper:2181'
-      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
-      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://broker:29092,PLAINTEXT_HOST://localhost:9092
-      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
-      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
-      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
-      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
-      KAFKA_JMX_PORT: 9101
-      KAFKA_JMX_HOSTNAME: localhost
+      - "${KAFKA_BROKER_INTERNAL_PORT}:${KAFKA_BROKER_INTERNAL_PORT}"
+      - "${KAFKA_BROKER_EXTERNAL_PORT}:${KAFKA_BROKER_EXTERNAL_PORT}"
+      - "${KAFKA_JMX_PORT}:${KAFKA_JMX_PORT}"
+    volumes:
+      - ./wrapper:/wrapper
+    command: /bin/sh -c "while [ ! -e /wrapper/modify-broker-env-done ]; do sleep 1; done && chmod +x /wrapper/wrapper-broker.sh && cat /wrapper/wrapper-broker.sh && /wrapper/wrapper-broker.sh"
+
+  # # broker2:
+  # #   <<: *broker-common
+  # #   hostname: broker2
+  # #   container_name: broker2
+  # #   ports:
+  # #     - "${KAFKA_BROKER_INTERNAL_PORT}:${KAFKA_BROKER_INTERNAL_PORT}"
+  # #   environment:
+  # #     KAFKA_BROKER_ID: 2
+  # #     KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://broker1:${KAFKA_BROKER_EXTERNAL_PORT},PLAINTEXT://broker2:${KAFKA_BROKER_EXTERNAL_PORT},PLAINTEXT://broker3:${KAFKA_BROKER_EXTERNAL_PORT},PLAINTEXT_HOST://localhost:${KAFKA_BROKER_INTERNAL_PORT}
+
+  # # broker3:
+  # #   <<: *broker-common
+  # #   hostname: broker3
+  # #   container_name: broker3
+  # #   ports:
+  # #     - "${KAFKA_BROKER_INTERNAL_PORT}:${KAFKA_BROKER_INTERNAL_PORT}"
+  # #   environment:
+  # #     KAFKA_BROKER_ID: 3
+  # #     KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://broker1:${KAFKA_BROKER_EXTERNAL_PORT},PLAINTEXT://broker2:${KAFKA_BROKER_EXTERNAL_PORT},PLAINTEXT://broker3:${KAFKA_BROKER_EXTERNAL_PORT},PLAINTEXT_HOST://localhost:${KAFKA_BROKER_INTERNAL_PORT}
+
 
   schema-registry:
     image: confluentinc/cp-schema-registry:7.5.0
     hostname: schema-registry
     container_name: schema-registry
     depends_on:
-      - broker
+      - broker1
     ports:
-      - "8081:8081"
+      - "${SCHEMA_REGISTRY_PORT}:${SCHEMA_REGISTRY_PORT}"
     environment:
       SCHEMA_REGISTRY_HOST_NAME: schema-registry
-      SCHEMA_REGISTRY_KAFKASTORE_BOOTSTRAP_SERVERS: 'broker:29092'
-      SCHEMA_REGISTRY_LISTENERS: http://0.0.0.0:8081
+      SCHEMA_REGISTRY_KAFKASTORE_BOOTSTRAP_SERVERS: 'broker1:${KAFKA_BROKER_EXTERNAL_PORT}'
+      SCHEMA_REGISTRY_LISTENERS: http://0.0.0.0:${SCHEMA_REGISTRY_PORT}
 
   connect:
     image: cnfldemos/kafka-connect-datagen:0.6.2-7.5.0
     hostname: connect
     container_name: connect
     depends_on:
-      - broker
+      - broker1
       - schema-registry
     ports:
-      - "8083:8083"
+      - "${CONNECT_PORT}:${CONNECT_PORT}"
     environment:
-      CONNECT_BOOTSTRAP_SERVERS: 'broker:29092'
+      CONNECT_BOOTSTRAP_SERVERS: 'broker1:${KAFKA_BROKER_EXTERNAL_PORT}'
       CONNECT_REST_ADVERTISED_HOST_NAME: connect
       CONNECT_GROUP_ID: compose-connect-group
       CONNECT_CONFIG_STORAGE_TOPIC: docker-connect-configs
@@ -67,7 +95,7 @@ services:
       CONNECT_STATUS_STORAGE_REPLICATION_FACTOR: 1
       CONNECT_KEY_CONVERTER: org.apache.kafka.connect.storage.StringConverter
       CONNECT_VALUE_CONVERTER: io.confluent.connect.avro.AvroConverter
-      CONNECT_VALUE_CONVERTER_SCHEMA_REGISTRY_URL: http://schema-registry:8081
+      CONNECT_VALUE_CONVERTER_SCHEMA_REGISTRY_URL: http://schema-registry:${SCHEMA_REGISTRY_PORT}
       CONNECT_PLUGIN_PATH: "/usr/share/java,/usr/share/confluent-hub-components"
       CONNECT_LOG4J_LOGGERS: org.apache.zookeeper=ERROR,org.I0Itec.zkclient=ERROR,org.reflections=ERROR
 
@@ -76,18 +104,18 @@ services:
     hostname: ksqldb-server
     container_name: ksqldb-server
     depends_on:
-      - broker
+      - broker1
       - connect
     ports:
-      - "8088:8088"
+      - "${KSQL_PORT}:${KSQL_PORT}"
     environment:
       KSQL_CONFIG_DIR: "/etc/ksql"
-      KSQL_BOOTSTRAP_SERVERS: "broker:29092"
+      KSQL_BOOTSTRAP_SERVERS: "broker1:${KAFKA_BROKER_EXTERNAL_PORT}"
       KSQL_HOST_NAME: ksqldb-server
-      KSQL_LISTENERS: "http://0.0.0.0:8088"
+      KSQL_LISTENERS: "http://0.0.0.0:${KSQL_PORT}"
       KSQL_CACHE_MAX_BYTES_BUFFERING: 0
-      KSQL_KSQL_SCHEMA_REGISTRY_URL: "http://schema-registry:8081"
-      KSQL_KSQL_CONNECT_URL: "http://connect:8083"
+      KSQL_KSQL_SCHEMA_REGISTRY_URL: "http://schema-registry:${SCHEMA_REGISTRY_PORT}"
+      KSQL_KSQL_CONNECT_URL: "http://connect:${CONNECT_PORT}"
       KSQL_KSQL_LOGGING_PROCESSING_TOPIC_REPLICATION_FACTOR: 1
       KSQL_KSQL_LOGGING_PROCESSING_TOPIC_AUTO_CREATE: 'true'
       KSQL_KSQL_LOGGING_PROCESSING_STREAM_AUTO_CREATE: 'true'
@@ -96,7 +124,7 @@ services:
     image: confluentinc/cp-ksqldb-cli:7.5.0
     container_name: ksqldb-cli
     depends_on:
-      - broker
+      - broker1
       - connect
       - ksqldb-server
     entrypoint: /bin/sh
@@ -108,33 +136,74 @@ services:
     container_name: ksql-datagen
     depends_on:
       - ksqldb-server
-      - broker
+      - broker1
       - schema-registry
       - connect
-    command: "bash -c 'echo Waiting for Kafka to be ready... && \
-                       cub kafka-ready -b broker:29092 1 40 && \
-                       echo Waiting for Confluent Schema Registry to be ready... && \
-                       cub sr-ready schema-registry 8081 40 && \
+    command: "bash -c 'echo Waiting for Kafka to be ready... cub kafka-ready -b broker1:${KAFKA_BROKER_EXTERNAL_PORT} 1 40 && \
+                       cub kafka-ready -b broker1:${KAFKA_BROKER_EXTERNAL_PORT} 1 40 && \
+                       echo Waiting for Confluent Schema Registry to be ready... cub sr-ready schema-registry ${SCHEMA_REGISTRY_PORT} 40 && \
+                       cub sr-ready schema-registry ${SCHEMA_REGISTRY_PORT} 40 && \
                        echo Waiting a few seconds for topic creation to finish... && \
                        sleep 11 && \
+                       echo done && \
                        tail -f /dev/null'"
     environment:
       KSQL_CONFIG_DIR: "/etc/ksql"
-      STREAMS_BOOTSTRAP_SERVERS: broker:29092
+      STREAMS_BOOTSTRAP_SERVERS: broker1:${KAFKA_BROKER_EXTERNAL_PORT}
       STREAMS_SCHEMA_REGISTRY_HOST: schema-registry
-      STREAMS_SCHEMA_REGISTRY_PORT: 8081
+      STREAMS_SCHEMA_REGISTRY_PORT: ${SCHEMA_REGISTRY_PORT}
 
   rest-proxy:
     image: confluentinc/cp-kafka-rest:7.5.0
     depends_on:
-      - broker
+      - broker1
       - schema-registry
     ports:
-      - 8082:8082
+      - ${REST_PROXY}:${REST_PROXY}
     hostname: rest-proxy
     container_name: rest-proxy
     environment:
       KAFKA_REST_HOST_NAME: rest-proxy
-      KAFKA_REST_BOOTSTRAP_SERVERS: 'broker:29092'
-      KAFKA_REST_LISTENERS: "http://0.0.0.0:8082"
-      KAFKA_REST_SCHEMA_REGISTRY_URL: 'http://schema-registry:8081'
+      KAFKA_REST_BOOTSTRAP_SERVERS: 'broker1:${KAFKA_BROKER_EXTERNAL_PORT}'
+      KAFKA_REST_LISTENERS: "http://0.0.0.0:${REST_PROXY}"
+      KAFKA_REST_SCHEMA_REGISTRY_URL: 'http://schema-registry:${SCHEMA_REGISTRY_PORT}'
+  
+  # postgresql:
+  #   image: postgres:latest
+  #   hostname: postgresql
+  #   volumes:
+  #     - pg_data:/var/lib/postgresql/data
+  #   environment:
+  #     POSTGRES_DB: "conduktor-platform"
+  #     POSTGRES_USER: "conduktor"
+  #     POSTGRES_PASSWORD: "change_me"
+  #     POSTGRES_HOST_AUTH_METHOD: "scram-sha-256"
+
+  # conduktor-platform:
+  #   image: conduktor/conduktor-platform:1.19.2
+  #   depends_on:
+  #     - postgresql
+  #   ports:
+  #     - "8080:8080"
+  #   volumes:
+  #     - conduktor_data:/var/conduktor
+  #   environment:
+  #     CDK_DATABASE_URL: "postgresql://conduktor:change_me@postgresql:5432/conduktor-platform"
+  #     CDK_MONITORING_CORTEX-URL: http://conduktor-monitoring:9009/
+  #     CDK_MONITORING_ALERT-MANAGER-URL: http://conduktor-monitoring:9010/
+  #     CDK_MONITORING_CALLBACK-URL: http://conduktor-platform:8080/monitoring/api/
+  #     CDK_MONITORING_NOTIFICATIONS-CALLBACK-URL: http://localhost:8080
+  #   healthcheck:
+  #     test: curl -f http://localhost:8080/platform/api/modules/health/live || exit 1
+  #     interval: 10s
+  #     start_period: 10s
+  #     timeout: 5s
+  #     retries: 3
+  # conduktor-monitoring:
+  #   image: conduktor/conduktor-platform-cortex:1.19.2
+  #   environment:
+  #     CDK_CONSOLE-URL: "http://conduktor-platform:8080"
+      
+# volumes:
+#   pg_data: {}
+#   conduktor_data: {}
