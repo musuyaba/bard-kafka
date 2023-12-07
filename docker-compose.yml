@@ -1,15 +1,6 @@
 version: '3.7'
 
 services:
-  modify-env:
-    image: alpine:latest
-    container_name: modify-env
-    volumes:
-      - ./wrapper:/wrapper
-    env_file:
-      - .env
-    command: /bin/sh -c "/wrapper/substitute.sh"
-  
   zookeeper:
     image: confluentinc/cp-zookeeper:7.5.0
     hostname: zookeeper
@@ -20,14 +11,12 @@ services:
     environment:
       ZOOKEEPER_CLIENT_PORT: ${ZOOKEEPER_PORT}
       ZOOKEEPER_TICK_TIME: 2000
-    volumes:
-      - ./wrapper:/wrapper
-    command: /bin/sh -c "while [ ! -e /wrapper/modify-broker-env-done-1 ]; do sleep 1; done && exec /etc/confluent/docker/run"
 
   broker1:
     user: root
     hostname: broker1
     container_name: broker1
+    restart: on-failure
     image: confluentinc/cp-kafka:7.5.0
     depends_on:
       - zookeeper
@@ -35,33 +24,41 @@ services:
       - "${KAFKA_BROKER_INTERNAL_PORT}:${KAFKA_BROKER_INTERNAL_PORT}"
       - "${KAFKA_BROKER_EXTERNAL_PORT}:${KAFKA_BROKER_EXTERNAL_PORT}"
       - "${KAFKA_JMX_PORT}:${KAFKA_JMX_PORT}"
-    volumes:
-      - ./wrapper:/wrapper
-    command: /bin/sh -c "while [ ! -e /wrapper/modify-broker-env-done-1 ]; do sleep 1; done && \
-      chmod +x /wrapper/wrapper-broker-1.sh && \
-      cat /wrapper/wrapper-broker-1.sh && \
-      /wrapper/wrapper-broker-1.sh"
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://broker1:${KAFKA_BROKER_EXTERNAL_PORT},PLAINTEXT_HOST://localhost:${KAFKA_BROKER_INTERNAL_PORT}
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:${ZOOKEEPER_PORT}
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 2
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 2
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 2
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+      KAFKA_JMX_PORT: ${KAFKA_JMX_PORT}
+      KAFKA_JMX_HOSTNAME: localhost 
 
-  # # broker2:
-  # #   <<: *broker-common
-  # #   hostname: broker2
-  # #   container_name: broker2
-  # #   ports:
-  # #     - "${KAFKA_BROKER_INTERNAL_PORT}:${KAFKA_BROKER_INTERNAL_PORT}"
-  # #   environment:
-  # #     KAFKA_BROKER_ID: 2
-  # #     KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://broker1:${KAFKA_BROKER_EXTERNAL_PORT},PLAINTEXT://broker2:${KAFKA_BROKER_EXTERNAL_PORT},PLAINTEXT://broker3:${KAFKA_BROKER_EXTERNAL_PORT},PLAINTEXT_HOST://localhost:${KAFKA_BROKER_INTERNAL_PORT}
-
-  # # broker3:
-  # #   <<: *broker-common
-  # #   hostname: broker3
-  # #   container_name: broker3
-  # #   ports:
-  # #     - "${KAFKA_BROKER_INTERNAL_PORT}:${KAFKA_BROKER_INTERNAL_PORT}"
-  # #   environment:
-  # #     KAFKA_BROKER_ID: 3
-  # #     KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://broker1:${KAFKA_BROKER_EXTERNAL_PORT},PLAINTEXT://broker2:${KAFKA_BROKER_EXTERNAL_PORT},PLAINTEXT://broker3:${KAFKA_BROKER_EXTERNAL_PORT},PLAINTEXT_HOST://localhost:${KAFKA_BROKER_INTERNAL_PORT}
-
+  broker2:
+    user: root
+    hostname: broker2
+    container_name: broker2
+    restart: on-failure
+    image: confluentinc/cp-kafka:7.5.0
+    depends_on:
+      - zookeeper
+    ports:
+      - "${KAFKA_BROKER_INTERNAL_PORT_2}:${KAFKA_BROKER_INTERNAL_PORT_2}"
+      - "${KAFKA_BROKER_EXTERNAL_PORT_2}:${KAFKA_BROKER_EXTERNAL_PORT_2}"
+      - "${KAFKA_JMX_PORT_2}:${KAFKA_JMX_PORT_2}"
+    environment:
+      KAFKA_BROKER_ID: 2
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://broker2:${KAFKA_BROKER_EXTERNAL_PORT_2},PLAINTEXT_HOST://localhost:${KAFKA_BROKER_INTERNAL_PORT_2}
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:${ZOOKEEPER_PORT}
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 2
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 2
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 2
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+      KAFKA_JMX_PORT: ${KAFKA_JMX_PORT_2}
+      KAFKA_JMX_HOSTNAME: localhost 
 
   schema-registry:
     image: confluentinc/cp-schema-registry:7.5.0
@@ -73,7 +70,7 @@ services:
       - "${SCHEMA_REGISTRY_PORT}:${SCHEMA_REGISTRY_PORT}"
     environment:
       SCHEMA_REGISTRY_HOST_NAME: schema-registry
-      SCHEMA_REGISTRY_KAFKASTORE_BOOTSTRAP_SERVERS: 'broker1:${KAFKA_BROKER_EXTERNAL_PORT}'
+      SCHEMA_REGISTRY_KAFKASTORE_BOOTSTRAP_SERVERS: 'broker1:${KAFKA_BROKER_EXTERNAL_PORT},broker2:${KAFKA_BROKER_EXTERNAL_PORT_2}'
       SCHEMA_REGISTRY_LISTENERS: http://0.0.0.0:${SCHEMA_REGISTRY_PORT}
 
   connect:
@@ -86,7 +83,7 @@ services:
     ports:
       - "${CONNECT_PORT}:${CONNECT_PORT}"
     environment:
-      CONNECT_BOOTSTRAP_SERVERS: 'broker1:${KAFKA_BROKER_EXTERNAL_PORT}'
+      CONNECT_BOOTSTRAP_SERVERS: 'broker1:${KAFKA_BROKER_EXTERNAL_PORT},broker2:${KAFKA_BROKER_EXTERNAL_PORT_2}'
       CONNECT_REST_ADVERTISED_HOST_NAME: connect
       CONNECT_GROUP_ID: compose-connect-group
       CONNECT_CONFIG_STORAGE_TOPIC: docker-connect-configs
@@ -113,7 +110,7 @@ services:
       - "${KSQL_PORT}:${KSQL_PORT}"
     environment:
       KSQL_CONFIG_DIR: "/etc/ksql"
-      KSQL_BOOTSTRAP_SERVERS: "broker1:${KAFKA_BROKER_EXTERNAL_PORT}"
+      KSQL_BOOTSTRAP_SERVERS: "broker1:${KAFKA_BROKER_EXTERNAL_PORT},broker2:${KAFKA_BROKER_EXTERNAL_PORT_2}"
       KSQL_HOST_NAME: ksqldb-server
       KSQL_LISTENERS: "http://0.0.0.0:${KSQL_PORT}"
       KSQL_CACHE_MAX_BYTES_BUFFERING: 0
@@ -142,17 +139,17 @@ services:
       - broker1
       - schema-registry
       - connect
-    command: "bash -c 'echo Waiting for Kafka to be ready... cub kafka-ready -b broker1:${KAFKA_BROKER_EXTERNAL_PORT} 1 40 && \
-                       cub kafka-ready -b broker1:${KAFKA_BROKER_EXTERNAL_PORT} 1 40 && \
-                       echo Waiting for Confluent Schema Registry to be ready... cub sr-ready schema-registry ${SCHEMA_REGISTRY_PORT} 40 && \
-                       cub sr-ready schema-registry ${SCHEMA_REGISTRY_PORT} 40 && \
-                       echo Waiting a few seconds for topic creation to finish... && \
-                       sleep 11 && \
-                       echo done && \
-                       tail -f /dev/null'"
+    command: "bash -c 'echo Waiting for Kafka to be ready... cub kafka-ready -b broker1:${KAFKA_BROKER_EXTERNAL_PORT},broker2:${KAFKA_BROKER_EXTERNAL_PORT_2} 1 40 && \
+              cub kafka-ready -b broker1:${KAFKA_BROKER_EXTERNAL_PORT},broker2:${KAFKA_BROKER_EXTERNAL_PORT_2} 1 40 && \
+              echo Waiting for Confluent Schema Registry to be ready... cub sr-ready schema-registry ${SCHEMA_REGISTRY_PORT} 40 && \
+              cub sr-ready schema-registry ${SCHEMA_REGISTRY_PORT} 40 && \
+              echo Waiting a few seconds for topic creation to finish... && \
+              sleep 11 && \
+              echo done && \
+              tail -f /dev/null'"
     environment:
       KSQL_CONFIG_DIR: "/etc/ksql"
-      STREAMS_BOOTSTRAP_SERVERS: broker1:${KAFKA_BROKER_EXTERNAL_PORT}
+      STREAMS_BOOTSTRAP_SERVERS: broker1:${KAFKA_BROKER_EXTERNAL_PORT},broker2:${KAFKA_BROKER_EXTERNAL_PORT_2}
       STREAMS_SCHEMA_REGISTRY_HOST: schema-registry
       STREAMS_SCHEMA_REGISTRY_PORT: ${SCHEMA_REGISTRY_PORT}
 
@@ -167,7 +164,7 @@ services:
     container_name: rest-proxy
     environment:
       KAFKA_REST_HOST_NAME: rest-proxy
-      KAFKA_REST_BOOTSTRAP_SERVERS: 'broker1:${KAFKA_BROKER_EXTERNAL_PORT}'
+      KAFKA_REST_BOOTSTRAP_SERVERS: 'broker1:${KAFKA_BROKER_EXTERNAL_PORT},broker2:${KAFKA_BROKER_EXTERNAL_PORT_2}'
       KAFKA_REST_LISTENERS: "http://0.0.0.0:${REST_PROXY}"
       KAFKA_REST_SCHEMA_REGISTRY_URL: 'http://schema-registry:${SCHEMA_REGISTRY_PORT}'
   
@@ -179,7 +176,7 @@ services:
       - pg_data:/var/lib/postgresql/data
     environment:
       POSTGRES_DB: "${POSTGRESQL_DB}"
-      POSTGRES_USER: "${conduktor}"
+      POSTGRES_USER: "${POSTGRESQL_USER}"
       POSTGRES_PASSWORD: "${POSTGRESQL_PASSWORD}"
       POSTGRES_HOST_AUTH_METHOD: "scram-sha-256"
 
@@ -189,18 +186,20 @@ services:
     container_name: conduktor-platform
     depends_on:
       - postgresql
+      - broker1
+      - broker2
     ports:
-      - "8080:8080"
+      - "${CONDUKTOR_PLATFORM_PORT}:${CONDUKTOR_PLATFORM_PORT}"
     volumes:
       - conduktor_data:/var/conduktor
     environment:
-      CDK_DATABASE_URL: "postgresql://${conduktor}:${POSTGRESQL_PASSWORD}@postgresql:5432/${POSTGRESQL_DB}"
-      CDK_MONITORING_CORTEX-URL: http://conduktor-monitoring:9009/
-      CDK_MONITORING_ALERT-MANAGER-URL: http://conduktor-monitoring:9010/
-      CDK_MONITORING_CALLBACK-URL: http://conduktor-platform:8080/monitoring/api/
-      CDK_MONITORING_NOTIFICATIONS-CALLBACK-URL: http://bard.localhost.local:8080
+      CDK_DATABASE_URL: "postgresql://${POSTGRESQL_USER}:${POSTGRESQL_PASSWORD}@postgresql:5432/${POSTGRESQL_DB}"
+      CDK_MONITORING_CORTEX-URL: http://conduktor-monitoring:${CDK_MONITORING_CORTEX_PORT}/
+      CDK_MONITORING_ALERT-MANAGER-URL: http://conduktor-monitoring:${CDK_MONITORING_ALERT_PORT}/
+      CDK_MONITORING_CALLBACK-URL: http://conduktor-platform:${CONDUKTOR_PLATFORM_PORT}/monitoring/api/
+      CDK_MONITORING_NOTIFICATIONS-CALLBACK-URL: http://localhost:${CONDUKTOR_PLATFORM_PORT}
     healthcheck:
-      test: curl -f http://bard.localhost.local:8080/platform/api/modules/health/live || exit 1
+      test: curl -f http://localhost:${CONDUKTOR_PLATFORM_PORT}/platform/api/modules/health/live || exit 1
       interval: 10s
       start_period: 10s
       timeout: 5s
@@ -208,8 +207,20 @@ services:
 
   conduktor-monitoring:
     image: conduktor/conduktor-platform-cortex:1.19.2
+    container_name: conduktor-monitoring
     environment:
-      CDK_CONSOLE-URL: "http://conduktor-platform:8080"
+      CDK_CONSOLE-URL: "http://conduktor-platform:${CONDUKTOR_PLATFORM_PORT}"
+
+  # nginx:
+  #   image: nginx:latest
+  #   ports:
+  #     - "80:80"
+  #   volumes:
+  #     - ./nginx.conf:/etc/nginx/nginx.conf:ro
+  #   depends_on:
+  #     - rest-proxy
+  #     - ksqldb-server
+  #     - schema-registry
       
 volumes:
   pg_data:
